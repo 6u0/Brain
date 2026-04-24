@@ -4,126 +4,133 @@ using System.Collections;
 
 public class ExperienceManager : MonoBehaviour
 {
-    // フェーズの名前も日本語（英語）のハイブリッドにしてわかりやすくしました
-    public enum 進行フェーズ
+    public enum Phase
     {
-        待機_Setup = 0,
-        フェーズ1_導入_Intro = 1,
-        フェーズ2_接触_Contact = 2,
-        フェーズ3_破棄_Throw = 3,
-        フェーズ4_夢中遊行_Sleepwalk = 4,
-        フェーズ5_終焉_Ending = 5
+        Setup = 0,
+        Intro = 1,
+        Contact = 2,
+        Throw = 3,
+        Sleepwalk = 4,
+        Ending = 5
     }
 
     [Header("▼ 現在のステータス（プレイ中に確認・変更可能）")]
-    public 進行フェーズ 現在のフェーズ = 進行フェーズ.待機_Setup;
+    public Phase currentPhase = Phase.Setup;
 
     [Space(10)]
     [Header("▼ 開発用デバッグ機能")]
-    public bool 途中からテストする = false;
-    public 進行フェーズ テスト開始フェーズ = 進行フェーズ.待機_Setup;
+    [Tooltip("チェックを入れると、下のフェーズからゲームが開始されます")]
+    public bool useDebugStart = false;
+    [Tooltip("テストを開始したいフェーズを選んでください")]
+    public Phase debugStartPhase = Phase.Setup;
 
     [Space(10)]
     [Header("▼ 疑似・後ろ倒れギミック（フェーズ3用）")]
-    [Tooltip("OVRCameraRigの親オブジェクト（XR Originなど）を指定してください")]
-    public Transform プレイヤーのXR_Origin; 
+    [Tooltip("OVRCameraRigの親オブジェクト（XR Originなど）を指定")]
+    public Transform xrOrigin; 
     [Tooltip("マイナスの値を入れると上を向く（後ろに倒れる）動きになります")]
-    public float 後ろに倒れる角度 = -25f;
+    public float tiltAngle = -25f;
     [Tooltip("この秒数かけて倒れます。短いほど衝撃的です")]
-    public float 倒れるまでの秒数 = 0.15f;
+    public float tiltDuration = 0.15f;
 
     [Space(10)]
     [Header("▼ 各フェーズ開始時に実行する演出リスト（＋ボタンで追加）")]
-    public UnityEvent 待機フェーズ開始時の設定;
-    public UnityEvent フェーズ1_導入_開始時の設定;
-    public UnityEvent フェーズ2_接触_開始時の設定;
-    public UnityEvent フェーズ3_破棄_開始時の設定;
-    public UnityEvent フェーズ4_夢中遊行_開始時の設定;
-    public UnityEvent フェーズ5_終焉_開始時の設定;
+    [Header("0. 待機・座標合わせ完了")]
+    public UnityEvent onSetupStart;
+    [Header("1. 導入：正木教授の語り")]
+    public UnityEvent onIntroStart;
+    [Header("2. 接触：脳を掴む")]
+    public UnityEvent onContactStart;
+    [Header("3. 破棄：脳を投げる・ブラックアウト")]
+    public UnityEvent onThrowStart;
+    [Header("4. 夢中遊行：SR映像")]
+    public UnityEvent onSleepwalkStart;
+    [Header("5. 終焉：液体に溶ける")]
+    public UnityEvent onEndingStart;
 
     void Start()
     {
-        // 途中からテストする設定なら、そのフェーズから開始
-        現在のフェーズ = 途中からテストする ? テスト開始フェーズ : 進行フェーズ.待機_Setup;
-        フェーズを実行する();
+        currentPhase = useDebugStart ? debugStartPhase : Phase.Setup;
+        ExecutePhaseLogic();
     }
 
-    // 外部（OSCや当たり判定）から呼ばれる「次へ進む」ボタン
-    public void 次のフェーズへ進む()
+    // 外部（OSCや当たり判定）から呼ばれる「次へ進む」処理
+    public void GoToNextPhase()
     {
-        if (現在のフェーズ == 進行フェーズ.フェーズ5_終焉_Ending) return; 
-        現在のフェーズ++;
-        フェーズを実行する();
+        if (currentPhase == Phase.Ending) return; 
+        currentPhase++;
+        ExecutePhaseLogic();
     }
 
-    [ContextMenu("★ 強制的に『現在のフェーズ』を実行（テスト用）")]
-    public void 強制実行ボタン()
+    // インスペクターを右クリックしてテスト実行するためのボタン
+    [ContextMenu("★ 強制的に『現在のフェーズ(currentPhase)』を実行")]
+    public void ForceExecuteCurrentPhase()
     {
-        フェーズを実行する();
+        ExecutePhaseLogic();
     }
 
-    void フェーズを実行する()
+    void ExecutePhaseLogic()
     {
-        Debug.Log($"<color=cyan>[進行管理]</color> {現在のフェーズ} が開始されました");
+        Debug.Log($"<color=cyan>[ExperienceManager]</color> フェーズ移行: {currentPhase} が開始されました");
 
-        switch (現在のフェーズ)
+        switch (currentPhase)
         {
-            case 進行フェーズ.待機_Setup:
-                待機フェーズ開始時の設定.Invoke();
+            case Phase.Setup:
+                onSetupStart.Invoke();
                 break;
 
-            case 進行フェーズ.フェーズ1_導入_Intro:
-                フェーズ1_導入_開始時の設定.Invoke();
+            case Phase.Intro:
+                onIntroStart.Invoke();
                 break;
 
-            case 進行フェーズ.フェーズ2_接触_Contact:
-                フェーズ2_接触_開始時の設定.Invoke();
+            case Phase.Contact:
+                onContactStart.Invoke();
                 break;
 
-            case 進行フェーズ.フェーズ3_破棄_Throw:
-                フェーズ3_破棄_開始時の設定.Invoke();
-                StartCoroutine(後ろ倒れギミックを実行());
-                StartCoroutine(指定秒数待って次へ(10f)); 
+            case Phase.Throw:
+                onThrowStart.Invoke();
+                StartCoroutine(SimulateFallingBackwards());
+                StartCoroutine(WaitAndNext(10f)); // 10秒後に自動で次へ
                 break;
 
-            case 進行フェーズ.フェーズ4_夢中遊行_Sleepwalk:
-                フェーズ4_夢中遊行_開始時の設定.Invoke();
-                StartCoroutine(指定秒数待って次へ(45f)); 
+            case Phase.Sleepwalk:
+                onSleepwalkStart.Invoke();
+                StartCoroutine(WaitAndNext(45f)); // 45秒後に自動で次へ
                 break;
 
-            case 進行フェーズ.フェーズ5_終焉_Ending:
-                フェーズ5_終焉_開始時の設定.Invoke();
+            case Phase.Ending:
+                onEndingStart.Invoke();
                 break;
         }
     }
 
-    IEnumerator 指定秒数待って次へ(float 待機秒数)
+    IEnumerator WaitAndNext(float waitTime)
     {
-        yield return new WaitForSeconds(待機秒数);
-        次のフェーズへ進む();
+        yield return new WaitForSeconds(waitTime);
+        GoToNextPhase();
     }
 
-    IEnumerator 後ろ倒れギミックを実行()
+    IEnumerator SimulateFallingBackwards()
     {
-        if (プレイヤーのXR_Origin == null) yield break;
+        if (xrOrigin == null) yield break;
 
-        Quaternion 初期角度 = プレイヤーのXR_Origin.rotation;
-        Vector3 初期位置 = プレイヤーのXR_Origin.position;
+        Quaternion startRotation = xrOrigin.rotation;
+        Vector3 startPosition = xrOrigin.position;
 
-        Quaternion 目標角度 = 初期角度 * Quaternion.Euler(後ろに倒れる角度, 0, 0);
-        Vector3 目標位置 = 初期位置 + new Vector3(0, -0.1f, -0.1f);
+        Quaternion targetRotation = startRotation * Quaternion.Euler(tiltAngle, 0, 0);
+        Vector3 targetPosition = startPosition + new Vector3(0, -0.1f, -0.1f);
 
-        float 経過時間 = 0f;
+        float elapsedTime = 0f;
 
-        while (経過時間 < 倒れるまでの秒数)
+        while (elapsedTime < tiltDuration)
         {
-            プレイヤーのXR_Origin.rotation = Quaternion.Lerp(初期角度, 目標角度, 経過時間 / 倒れるまでの秒数);
-            プレイヤーのXR_Origin.position = Vector3.Lerp(初期位置, 目標位置, 経過時間 / 倒れるまでの秒数);
-            経過時間 += Time.deltaTime;
+            xrOrigin.rotation = Quaternion.Lerp(startRotation, targetRotation, elapsedTime / tiltDuration);
+            xrOrigin.position = Vector3.Lerp(startPosition, targetPosition, elapsedTime / tiltDuration);
+            elapsedTime += Time.deltaTime;
             yield return null;
         }
 
-        プレイヤーのXR_Origin.rotation = 目標角度;
-        プレイヤーのXR_Origin.position = 目標位置;
+        xrOrigin.rotation = targetRotation;
+        xrOrigin.position = targetPosition;
     }
 }
