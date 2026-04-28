@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>脳髄XR - Operation Panel</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --panel-bg: #1e1e1e;
+            --accent-color: #b00020;
+            --text-main: #e0e0e0;
+            --text-muted: #888;
+            --btn-bg: #333;
+            --success: #03dac6;
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* タブナビゲーション */
+        .tab-nav {
+            display: flex;
+            background-color: #000;
+            border-bottom: 2px solid #333;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: var(--text-muted);
+            background: none;
+            border: none;
+            cursor: pointer;
+        }
+        .tab-btn.active {
+            color: var(--text-main);
+            border-bottom: 3px solid var(--accent-color);
+        }
+
+        .container {
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        /* タブコンテンツの切り替え */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .panel {
+            background-color: var(--panel-bg);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            margin-bottom: 20px;
+        }
+
+        h2 { margin-top: 0; border-bottom: 1px solid #333; padding-bottom: 10px; }
+
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-size: 0.9em; color: var(--text-muted); }
+        input[type="text"], input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            box-sizing: border-box;
+            background-color: #2a2a2a;
+            border: 1px solid #444;
+            color: white;
+            border-radius: 6px;
+            font-size: 1em;
+        }
+
+        .btn-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        button {
+            padding: 15px;
+            font-size: 1.1em;
+            font-weight: bold;
+            border: none;
+            border-radius: 8px;
+            background-color: var(--btn-bg);
+            color: var(--text-main);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        button:active { transform: scale(0.95); }
+        
+        /* スタッフボタン */
+        .staff-btn.active { background-color: var(--success); color: #000; }
+        
+        /* メインアクションボタン */
+        .btn-start {
+            background-color: var(--accent-color);
+            width: 100%;
+            padding: 25px;
+            font-size: 1.5em;
+            margin-top: 20px;
+        }
+        .btn-test { background-color: #444; font-size: 0.9em; }
+
+        .status-box {
+            background-color: #000;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 1.8em;
+            font-weight: bold;
+            color: var(--accent-color);
+            border: 2px solid #333;
+            margin-bottom: 15px;
+        }
+
+        .ws-status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: red;
+            margin-right: 8px;
+        }
+        .ws-status.connected { background-color: var(--success); }
+
+        #log-area {
+            background-color: #000;
+            color: var(--success);
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.9em;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="tab-nav">
+        <button class="tab-btn active" onclick="switchTab('main')">Main (通常操作)</button>
+        <button class="tab-btn" onclick="switchTab('admin')">Admin (設営・テスト)</button>
+    </div>
+
+    <div class="container">
+        
+        <div id="tab-main" class="tab-content active">
+            
+            <div class="panel">
+                <h2>1. 担当スタッフ</h2>
+                <div class="btn-grid" id="staff-grid">
+                    <button class="staff-btn" onclick="selectStaff('ひかる', this)">ひかる</button>
+                    <button class="staff-btn" onclick="selectStaff('えみり', this)">えみり</button>
+                    <button class="staff-btn" onclick="selectStaff('ともや', this)">ともや</button>
+                    <button class="staff-btn" onclick="selectStaff('あゆむ', this)">あゆむ</button>
+                    <button class="staff-btn" onclick="selectStaff('ゆきや', this)">ゆきや</button>
+                    <button class="staff-btn" onclick="selectStaff('とうい', this)">とうい</button>
+                </div>
+                <p style="text-align: right; margin-bottom: 0;">現在: <strong id="current-staff" style="color:var(--success);">未選択</strong></p>
+            </div>
+
+            <div class="panel">
+                <h2>2. 進行コントロール</h2>
+                <div class="status-box" id="phase-display">
+                    Phase: WAIT
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button onclick="sendOSC('/phase/prev')" style="flex: 1;">◀ 戻す</button>
+                    <button onclick="sendOSC('/phase/next')" style="flex: 1;">進める ▶</button>
+                </div>
+                <button class="btn-start" onclick="startGame()">▶ 体験スタート</button>
+            </div>
+
+        </div>
+
+        <div id="tab-admin" class="tab-content">
+            
+            <div class="panel">
+                <h2><span id="ws-indicator" class="ws-status"></span>通信設定</h2>
+                <div class="form-group">
+                    <label>WebSocket URL (中継PCのIP)</label>
+                    <input type="text" id="ws-url" value="ws://192.168.1.100:8080">
+                </div>
+                <div class="form-group">
+                    <label>OSC Target IP (Unity PCのIP)</label>
+                    <input type="text" id="osc-ip" value="127.0.0.1">
+                </div>
+                <div class="form-group">
+                    <label>OSC Port</label>
+                    <input type="number" id="osc-port" value="9000">
+                </div>
+                <button onclick="connectWebSocket()" style="width: 100%; background-color: var(--success); color: #000;">接続テスト / 更新</button>
+            </div>
+
+            <div class="panel">
+                <h2>アクチュエータ強制動作試験</h2>
+                <p style="color: var(--accent-color); font-size: 0.8em; margin-top:0;">※体験者がいない状態で使用してください</p>
+                <div class="btn-grid">
+                    <button class="btn-test" onclick="sendOSC('/test/vibration', 1)">頭部バイブ作動</button>
+                    <button class="btn-test" onclick="sendOSC('/test/servo_reset', 1)">サーボ初期化</button>
+                    <button class="btn-test" onclick="sendOSC('/test/mirror_flip', 1)">ミラー跳ね上げ</button>
+                    <button class="btn-test" onclick="sendOSC('/test/chair_shake', 1)">椅子 衝撃</button>
+                    <button class="btn-test" onclick="sendOSC('/test/sound_masaki', 1)">正木音声テスト</button>
+                    <button class="btn-test" onclick="sendOSC('/test/blackout', 1)">ブラックアウト</button>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>システムログ</h2>
+                <div id="log-area"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+        let ws;
+        let currentStaffName = "未選択";
+
+        // タブ切り替え処理
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById('tab-' + tabName).classList.add('active');
+            event.currentTarget.classList.add('active');
+        }
+
+        // スタッフ選択処理
+        function selectStaff(name, btnElement) {
+            currentStaffName = name;
+            document.getElementById('current-staff').innerText = name;
+            
+            const buttons = document.querySelectorAll('.staff-btn');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            btnElement.classList.add('active');
+            
+            log(`Staff selected: ${name}`);
+            sendOSC('/system/staff', name);
+        }
+
+        // ゲーム開始処理
+        function startGame() {
+            if (currentStaffName === "未選択") {
+                alert("担当スタッフを選択してください。");
+                return;
+            }
+            if(confirm('脳髄XRの体験を開始しますか？')) {
+                document.getElementById('phase-display').innerText = "Phase: 1_INTRO";
+                sendOSC('/phase/start', 1);
+                log('GAME STARTED');
+            }
+        }
+
+        // WebSocket接続処理
+        function connectWebSocket() {
+            const url = document.getElementById('ws-url').value;
+            log(`Connecting to WebSocket: ${url}...`);
+            
+            if(ws) ws.close();
+            
+            try {
+                ws = new WebSocket(url);
+                
+                ws.onopen = () => {
+                    document.getElementById('ws-indicator').classList.add('connected');
+                    log('WebSocket Connected!');
+                };
+                
+                ws.onclose = () => {
+                    document.getElementById('ws-indicator').classList.remove('connected');
+                    log('WebSocket Disconnected.');
+                };
+                
+                ws.onerror = (error) => {
+                    log('WebSocket Error. Check console.');
+                };
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    if(data.address === '/phase/current') {
+                        document.getElementById('phase-display').innerText = `Phase: ${data.value}`;
+                        log(`Phase updated: ${data.value}`);
+                    }
+                };
+            } catch (e) {
+                log('Invalid WebSocket URL.');
+            }
+        }
+
+        // OSC送信
+        function sendOSC(address, value = null) {
+            const ip = document.getElementById('osc-ip').value;
+            const port = document.getElementById('osc-port').value;
+            
+            const message = {
+                ip: ip,
+                port: parseInt(port),
+                address: address,
+                args: value !== null ? [{ type: typeof value === 'number' ? 'i' : 's', value: value }] : []
+            };
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(message));
+                log(`Sent OSC: ${address} [${value}]`);
+            } else {
+                log(`[Offline] OSC: ${address}`);
+            }
+        }
+
+        // ログ出力
+        function log(msg) {
+            const logArea = document.getElementById('log-area');
+            const time = new Date().toLocaleTimeString('ja-JP');
+            logArea.innerHTML += `<div>[${time}] ${msg}</div>`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        window.onload = () => {
+            log('System Boot sequence initiated...');
+        };
+    </script>
+</body>
+</html>
