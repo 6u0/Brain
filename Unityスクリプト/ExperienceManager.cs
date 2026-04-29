@@ -1,223 +1,389 @@
-using UnityEngine;
+using System;
 using System.Collections;
+using TMPro;
+using UnityEngine;
+using UnityEngine.Events;
+using UnityEngine.InputSystem;
 
-/// <summary>
-/// 脳髄XR体験 総合司令塔クラス
-/// 全フェーズの進行と、ESP・VRデバイス間のデータフローを統括する
-/// </summary>
 public class ExperienceManager : MonoBehaviour
 {
-    // フェーズ定義
     public enum Phase
     {
-        Wait,           // 待機状態
-        Phase1_Intro,   // 【導入：剥離】アテンド・正木教授出現
-        Phase2_Contact, // 【接触：濁流】脳髄論・頭部デバイスへのフィードバック
-        Phase3_Throw,   // 【絶頂：破棄】脳を投げる・ブラックアウト・物理ショック
-        Phase4_Erosion, // 【変容：夢中遊行】SR切り替え・代替現実・操作不能
-        Phase5_Ending   // 【終焉：還流】HMD着脱・現実の肖像画・エンディング
+        Wait,
+        Intro,
+        Contact,
+        Throw,
+        Erosion,
+        Ending,
+        Complete
     }
 
-    [Header("Current State")]
+    [Header("Phase")]
+    [InspectorName("Current Phase")]
     public Phase currentPhase = Phase.Wait;
 
-    [Header("Settings")]
-    public float brainThrowVelocityThreshold = 5.0f; // 脳を投げたか判定する速度の閾値
+    public event Action<Phase> PhaseChanged;
 
-    // --- 各種外部スクリプトの参照（適宜アタッチしてください） ---
-    // public ESPNetworkManager espManager; // ESPとの通信用（OSCやSerial）
-    // public VisualEffectManager vfxManager; // ホワイトアウト/ノイズ制御など
-    // public AudioManager audioManager; // バイノーラル音声・幻聴制御
-    // public OVRCameraRig cameraRig; // Questコントローラーの位置・速度取得用
+    [Header("Settings")]
+    [SerializeField, InspectorName("Start On Play")]
+    private bool startOnPlay = false;
+
+    [SerializeField, InspectorName("Brain Throw Velocity Threshold")]
+    private float brainThrowVelocityThreshold = 5.0f;
+
+    [Header("Durations")]
+    [SerializeField, InspectorName("Intro Duration Seconds")]
+    private float introDurationSeconds = 20.0f;
+
+    [SerializeField, InspectorName("Contact Timeout Seconds")]
+    private float contactTimeoutSeconds = 70.0f;
+
+    [SerializeField, InspectorName("Throw Blackout Seconds")]
+    private float throwBlackoutSeconds = 15.0f;
+
+    [SerializeField, InspectorName("Erosion Duration Seconds")]
+    private float erosionDurationSeconds = 45.0f;
+
+    [SerializeField, InspectorName("Ending Fallback Seconds")]
+    private float endingFallbackSeconds = 20.0f;
+
+    [Header("Phase Events")]
+    [SerializeField] private UnityEvent onWaitEnter;
+    [SerializeField] private UnityEvent onIntroEnter;
+    [SerializeField] private UnityEvent onContactEnter;
+    [SerializeField] private UnityEvent onThrowEnter;
+    [SerializeField] private UnityEvent onErosionEnter;
+    [SerializeField] private UnityEvent onEndingEnter;
+    [SerializeField] private UnityEvent onCompleteEnter;
+
+    [Header("Debug")]
+    [SerializeField, InspectorName("Allow Keyboard Debug")]
+    private bool allowKeyboardDebug = true;
+
+    [SerializeField, InspectorName("Start Key")]
+    private KeyCode startKey = KeyCode.Return;
+
+    [SerializeField, InspectorName("Next Phase Key")]
+    private KeyCode nextPhaseKey = KeyCode.Space;
+
+    [SerializeField, InspectorName("Previous Phase Key")]
+    private KeyCode prevPhaseKey = KeyCode.Backspace;
+
+    [Header("References")]
+    [SerializeField, InspectorName("Operation Panel OSC")]
+    private OperationPanelOSC operationPanelOsc;
+
+    [SerializeField, InspectorName("Phase Debug TMP")]
+    private TMP_Text phaseDebugText;
+
+    private bool hasRequestedOperationPanelPreparation;
+
+    private void Awake()
+    {
+        EnsureOperationPanelReference();
+        UpdatePhaseDebugText();
+    }
 
     private void Start()
     {
-        // デバッグ用：起動時にPhase1から開始
-        ChangePhase(Phase.Phase1_Intro);
+        ChangePhase(startOnPlay ? Phase.Intro : Phase.Wait);
     }
 
     private void Update()
     {
-        // 常に監視すべき処理（フェーズごとの毎フレーム処理）
         switch (currentPhase)
         {
-            case Phase.Phase2_Contact:
+            case Phase.Contact:
                 UpdateContactPhase();
                 break;
-            case Phase.Phase3_Throw:
+            case Phase.Throw:
                 UpdateThrowPhase();
                 break;
-            case Phase.Phase5_Ending:
+            case Phase.Ending:
                 UpdateEndingPhase();
                 break;
         }
 
-        // デバッグ用：スペースキーで強制的に次のフェーズへ
-        if (Input.GetKeyDown(KeyCode.Space))
+        if (!allowKeyboardDebug)
         {
-            GoToNextPhase();
+            return;
+        }
+
+        var keyboard = Keyboard.current;
+        if (keyboard == null)
+        {
+            return;
+        }
+
+        if (keyboard[(Key)startKey].wasPressedThisFrame)
+        {
+            OnStartButtonPressed();
+        }
+
+        if (keyboard[(Key)nextPhaseKey].wasPressedThisFrame)
+        {
+            ForceNextPhase();
+        }
+
+        if (keyboard[(Key)prevPhaseKey].wasPressedThisFrame)
+        {
+            ForcePrevPhase();
         }
     }
 
-    /// <summary>
-    /// フェーズの切り替えと初期化処理
-    /// </summary>
     public void ChangePhase(Phase newPhase)
     {
-        currentPhase = newPhase;
-        Debug.Log($"[ExperienceManager] フェーズ移行: {currentPhase}");
+        if (currentPhase == newPhase)
+        {
+            UpdatePhaseDebugText();
+            return;
+        }
 
-        StopAllCoroutines(); // 前フェーズのコルーチンをキャンセル
+        if (currentPhase == Phase.Wait && newPhase != Phase.Wait)
+        {
+            EnsureOperationPanelPrepared();
+        }
+
+        currentPhase = newPhase;
+        Debug.Log($"[ExperienceManager] Phase changed: {currentPhase}");
+
+        StopAllCoroutines();
+
+        UpdatePhaseDebugText();
+        PhaseChanged?.Invoke(currentPhase);
+        InvokeEnterHook(currentPhase);
 
         switch (currentPhase)
         {
-            case Phase.Phase1_Intro:
-                StartCoroutine(Routine_Phase1_Intro());
+            case Phase.Wait:
+                StartCoroutine(Routine_Wait());
                 break;
-            case Phase.Phase2_Contact:
-                StartCoroutine(Routine_Phase2_Contact());
+            case Phase.Intro:
+                StartCoroutine(Routine_Intro());
                 break;
-            case Phase.Phase3_Throw:
-                StartCoroutine(Routine_Phase3_Throw());
+            case Phase.Contact:
+                StartCoroutine(Routine_Contact());
                 break;
-            case Phase.Phase4_Erosion:
-                StartCoroutine(Routine_Phase4_Erosion());
+            case Phase.Throw:
+                StartCoroutine(Routine_Throw());
                 break;
-            case Phase.Phase5_Ending:
-                StartCoroutine(Routine_Phase5_Ending());
+            case Phase.Erosion:
+                StartCoroutine(Routine_Erosion());
+                break;
+            case Phase.Ending:
+                StartCoroutine(Routine_Ending());
+                break;
+            case Phase.Complete:
+                StartCoroutine(Routine_Complete());
                 break;
         }
     }
 
-    private void GoToNextPhase()
+    public void OnStartButtonPressed()
     {
-        if ((int)currentPhase < System.Enum.GetNames(typeof(Phase)).Length - 1)
+        EnsureOperationPanelPrepared();
+
+        if (currentPhase == Phase.Wait)
         {
-            ChangePhase((Phase)((int)currentPhase + 1));
+            ChangePhase(Phase.Intro);
+            return;
+        }
+
+        ForceNextPhase();
+    }
+
+    public void ForceNextPhase()
+    {
+        int next = Mathf.Min((int)currentPhase + 1, Enum.GetValues(typeof(Phase)).Length - 1);
+        ChangePhase((Phase)next);
+    }
+
+    public void ForcePrevPhase()
+    {
+        int prev = Mathf.Max((int)currentPhase - 1, 0);
+        ChangePhase((Phase)prev);
+    }
+
+    public string GetPhaseLabel(Phase phase)
+    {
+        switch (phase)
+        {
+            case Phase.Wait:
+                return "Wait";
+            case Phase.Intro:
+                return "Intro";
+            case Phase.Contact:
+                return "Contact";
+            case Phase.Throw:
+                return "Throw";
+            case Phase.Erosion:
+                return "Erosion";
+            case Phase.Ending:
+                return "Ending";
+            case Phase.Complete:
+                return "Complete";
+            default:
+                return "Unknown";
         }
     }
 
-    // =========================================================
-    // 各フェーズのコルーチン（時間経過ベースの演出）
-    // =========================================================
-
-    private IEnumerator Routine_Phase1_Intro()
+    private IEnumerator Routine_Wait()
     {
-        // 0:00~ パススルー開始、案内役退場
-        Debug.Log("案内役が退出、正木教授の登場準備");
-        
-        // 頭部のバイブレーター作動（ESPへ送信）
-        // espManager.SendHeadsetVibration(true);
-        // audioManager.PlayBoneSawSound();
-        
-        yield return new WaitForSeconds(10.0f); // 10秒待機
-
-        // 正木教授出現・爆語り開始
-        // vfxManager.ShowProfessorMasaki();
-        // audioManager.PlayProfessorSpeech();
-        
-        yield return new WaitForSeconds(10.0f); // 語りの後、次のフェーズへ促す
-        
-        ChangePhase(Phase.Phase2_Contact);
-    }
-
-    private IEnumerator Routine_Phase2_Contact()
-    {
-        // 脳デバイスに触れるのを待つフェーズ
-        Debug.Log("脳デバイスへの接触待機...");
-        yield break; 
-        // UpdateContactPhase() で触覚ループを処理し、条件を満たしたらPhase3へ
-    }
-
-    private IEnumerator Routine_Phase3_Throw()
-    {
-        // 脳が投げられた瞬間の処理
-        Debug.Log("脳デバイス投棄！物理ショック発動");
-
-        // 1. ESPへミラー跳ね上げ命令送信
-        // espManager.TriggerMirrorFlip();
-
-        // 2. 視界ホワイトアウト → ブラックアウト
-        // vfxManager.TriggerWhiteoutThenBlackout();
-
-        // 3. すべての音を消失させる
-        // audioManager.StopAllSounds();
-
-        yield return new WaitForSeconds(5.0f); // 暗闇の中での潜伏時間
-
-        // SR映像へ切り替えなどの準備
-        ChangePhase(Phase.Phase4_Erosion);
-    }
-
-    private IEnumerator Routine_Phase4_Erosion()
-    {
-        Debug.Log("代替現実 / 夢中遊行フェーズ開始");
-
-        // 視界を戻す（録画されたSR映像の再生 or コントローラー入力無視での自動歩行開始）
-        // vfxManager.PlaySRVideo();
-        // audioManager.PlayMultipleVoices("大丈夫ですか");
-
-        yield return new WaitForSeconds(25.0f); // 演出時間
-
-        ChangePhase(Phase.Phase5_Ending);
-    }
-
-    private IEnumerator Routine_Phase5_Ending()
-    {
-        Debug.Log("エンディング待機。HMDが外されるのを待つ...");
+        Debug.Log("[ExperienceManager] Wait phase.");
         yield break;
-        // UpdateEndingPhase() でHMD着脱を検知して完了
     }
 
-    // =========================================================
-    // 各フェーズの毎フレーム処理（センサ入力・フィードバック）
-    // =========================================================
+    private IEnumerator Routine_Intro()
+    {
+        Debug.Log("[ExperienceManager] Intro phase.");
+        yield return new WaitForSeconds(introDurationSeconds);
+        ChangePhase(Phase.Contact);
+    }
+
+    private IEnumerator Routine_Contact()
+    {
+        Debug.Log("[ExperienceManager] Contact phase.");
+        yield return new WaitForSeconds(contactTimeoutSeconds);
+
+        if (currentPhase == Phase.Contact)
+        {
+            ChangePhase(Phase.Throw);
+        }
+    }
+
+    private IEnumerator Routine_Throw()
+    {
+        Debug.Log("[ExperienceManager] Throw phase.");
+        yield return new WaitForSeconds(throwBlackoutSeconds);
+        ChangePhase(Phase.Erosion);
+    }
+
+    private IEnumerator Routine_Erosion()
+    {
+        Debug.Log("[ExperienceManager] Erosion phase.");
+        yield return new WaitForSeconds(erosionDurationSeconds);
+        ChangePhase(Phase.Ending);
+    }
+
+    private IEnumerator Routine_Ending()
+    {
+        Debug.Log("[ExperienceManager] Ending phase.");
+
+        float elapsed = 0.0f;
+        while (elapsed < endingFallbackSeconds)
+        {
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        if (currentPhase == Phase.Ending)
+        {
+            ChangePhase(Phase.Complete);
+        }
+    }
+
+    private IEnumerator Routine_Complete()
+    {
+        Debug.Log("[ExperienceManager] Complete phase.");
+        yield break;
+    }
 
     private void UpdateContactPhase()
     {
-        // 【脳デバイスの圧力センサ -> 頭部デバイスのサーボへ同期】
-        
-        // float[] pressures = espManager.GetBrainPressures();
-        // float averagePressure = CalculateAverage(pressures);
-
-        // 握る力に応じて映像ノイズと音響を激化
-        // vfxManager.SetNoiseIntensity(averagePressure);
-        // audioManager.SetHeartbeatIntensity(averagePressure);
-
-        // 頭部のサーボへ押し込み圧力を送信
-        // espManager.SendHeadsetServos(pressures);
-
-        // ※もし脳が一定の力以上で握られ続けたら、強制的にPhase3へ移行するタイマーを仕込んでも良い
+        _ = brainThrowVelocityThreshold;
     }
 
     private void UpdateThrowPhase()
     {
-        // 【投げるアクションの検知】
-        // Questコントローラー（脳デバイス内蔵）の加速度・速度を取得して投擲を検知
-
-        /*
-        Vector3 brainVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RHand); // 例
-        if (brainVelocity.magnitude > brainThrowVelocityThreshold)
-        {
-            ChangePhase(Phase.Phase3_Throw);
-        }
-        */
     }
 
     private void UpdateEndingPhase()
     {
-        // 【HMD着脱検知】
-        // HMDを外した（近接センサーがオフになった）瞬間を検知する
-        // OVRPlugin.userPresent などを使用
+    }
 
-        /*
-        if (!OVRPlugin.userPresent) 
+    public void NotifyBrainThrown()
+    {
+        if (currentPhase == Phase.Contact)
         {
-            // 最後の「剥き出しの正木の声」を外部スピーカーから鳴らす
-            // espManager.PlayExternalSpeaker();
-            Debug.Log("体験終了");
-            enabled = false; // Managerの停止
+            ChangePhase(Phase.Throw);
         }
-        */
+    }
+
+    public void NotifyHmdRemoved()
+    {
+        if (currentPhase == Phase.Ending)
+        {
+            ChangePhase(Phase.Complete);
+        }
+    }
+
+    private void InvokeEnterHook(Phase phase)
+    {
+        switch (phase)
+        {
+            case Phase.Wait:
+                onWaitEnter?.Invoke();
+                break;
+            case Phase.Intro:
+                onIntroEnter?.Invoke();
+                break;
+            case Phase.Contact:
+                onContactEnter?.Invoke();
+                break;
+            case Phase.Throw:
+                onThrowEnter?.Invoke();
+                break;
+            case Phase.Erosion:
+                onErosionEnter?.Invoke();
+                break;
+            case Phase.Ending:
+                onEndingEnter?.Invoke();
+                break;
+            case Phase.Complete:
+                onCompleteEnter?.Invoke();
+                break;
+        }
+    }
+
+    private void EnsureOperationPanelPrepared()
+    {
+        EnsureOperationPanelReference();
+
+        if (operationPanelOsc == null)
+        {
+            Debug.LogWarning("[ExperienceManager] OperationPanelOSC was not found.");
+            return;
+        }
+
+        operationPanelOsc.PrepareOperationPanel();
+        if (!hasRequestedOperationPanelPreparation)
+        {
+            hasRequestedOperationPanelPreparation = true;
+            Debug.Log("[ExperienceManager] Operation panel preparation requested.");
+        }
+    }
+
+    private void EnsureOperationPanelReference()
+    {
+        if (operationPanelOsc != null)
+        {
+            return;
+        }
+
+        operationPanelOsc = FindFirstObjectByType<OperationPanelOSC>();
+        if (operationPanelOsc != null)
+        {
+            Debug.Log("[ExperienceManager] OperationPanelOSC was assigned automatically.");
+        }
+    }
+
+    private void UpdatePhaseDebugText()
+    {
+        if (phaseDebugText == null)
+        {
+            return;
+        }
+
+        phaseDebugText.text = $"Phase: {GetPhaseLabel(currentPhase)}";
     }
 }
